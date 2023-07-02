@@ -41,9 +41,18 @@ def _group_parameters(block: Tensor) -> tuple[Tensor, Tensor]:
     maximum = block.amax(dim=-1)
     scales = (maximum - minimum) / 15.0
     constant = scales < torch.finfo(scales.dtype).eps
-    scales = torch.where(constant, torch.ones_like(scales), scales)
+    constant_scale = torch.where(
+        minimum == 0,
+        torch.ones_like(minimum),
+        minimum.abs() / 15.0,
+    )
+    scales = torch.where(constant, constant_scale, scales)
     zero_points = torch.round(-minimum / scales).clamp(0, 15)
-    zero_points = torch.where(constant, torch.zeros_like(zero_points), zero_points)
+    negative_constant = constant & (minimum < 0)
+    zero_points = torch.where(negative_constant, torch.full_like(zero_points, 15), zero_points)
+    zero_points = torch.where(
+        constant & ~negative_constant, torch.zeros_like(zero_points), zero_points
+    )
     return scales, zero_points
 
 
