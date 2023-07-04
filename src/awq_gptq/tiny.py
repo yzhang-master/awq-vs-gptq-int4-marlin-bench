@@ -33,9 +33,13 @@ def make_markov_sequences(
     vocab_size: int = 32,
     branching: int = 3,
     seed: int = 123,
+    transition_seed: int | None = None,
 ) -> Tensor:
     generator = torch.Generator().manual_seed(seed)
-    successors = torch.randperm(vocab_size, generator=generator)[:vocab_size]
+    transition_generator = torch.Generator().manual_seed(
+        seed if transition_seed is None else transition_seed
+    )
+    successors = torch.randperm(vocab_size, generator=transition_generator)[:vocab_size]
     choices = torch.stack([successors.roll(int(index)) for index in range(branching)], dim=1)
     sequences = torch.empty(count, sequence_length, dtype=torch.long)
     sequences[:, 0] = torch.randint(vocab_size, (count,), generator=generator)
