@@ -1,0 +1,65 @@
+{
+  "scope": "Synthetic Markov bigram task; tiny trained torch model; explicit packed INT4 unpack + fp32 matmul on CPU",
+  "config": {
+    "seed": 41,
+    "training_steps": 160,
+    "train_sequences": 128,
+    "eval_sequences": 128,
+    "sequence_length": 33,
+    "vocab_size": 32,
+    "hidden_size": 32,
+    "group_size": 16,
+    "decode_tokens": 32,
+    "decode_batch": 16,
+    "repeats": 7,
+    "threads": 1
+  },
+  "environment": {
+    "python": "3.12.3",
+    "torch": "2.15.0+cpu",
+    "platform": "Linux-6.8.0-149-generic-x86_64-with-glibc2.39"
+  },
+  "training_loss_first": 3.568448066711426,
+  "training_loss_last": 1.1292293071746826,
+  "results": [
+    {
+      "method": "fp32",
+      "perplexity": 3.168665647506714,
+      "tokens_per_second": 51845.17693660013,
+      "min_tokens_per_second": 45904.83175070345,
+      "max_tokens_per_second": 56390.7642055513,
+      "linear_storage_bytes": 20864
+    },
+    {
+      "method": "rtn",
+      "perplexity": 3.175147294998169,
+      "tokens_per_second": 12358.040926875943,
+      "min_tokens_per_second": 9678.630525012917,
+      "max_tokens_per_second": 15476.826203441964,
+      "linear_storage_bytes": 5056,
+      "quantization_seconds": 0.007074345001456095
+    },
+    {
+      "method": "awq",
+      "perplexity": 3.1842474937438965,
+      "tokens_per_second": 16620.839248761084,
+      "min_tokens_per_second": 14304.793463888367,
+      "max_tokens_per_second": 17943.583340748708,
+      "linear_storage_bytes": 5056,
+      "quantization_seconds": 0.014516881998133613
+    },
+    {
+      "method": "gptq",
+      "perplexity": 3.175017833709717,
+      "tokens_per_second": 17055.974276632354,
+      "min_tokens_per_second": 14205.571713985315,
+      "max_tokens_per_second": 18899.670067447383,
+      "linear_storage_bytes": 5056,
+      "quantization_seconds": 0.028838985999755096
+    }
+  ],
+  "pareto_frontier": [
+    "fp32"
+  ],
+  "storage_note": "Linear weights, scales, zero points, biases and explicit input-scale vectors; embeddings and activations excluded"
+}
