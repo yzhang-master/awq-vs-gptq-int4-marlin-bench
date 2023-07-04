@@ -121,8 +121,12 @@ def run_benchmark(
 ) -> dict:
     torch.set_num_threads(threads)
     torch.manual_seed(41)
-    train = make_markov_sequences(train_sequences, sequence_length, vocab_size, seed=101)
-    evaluation = make_markov_sequences(eval_sequences, sequence_length, vocab_size, seed=202)
+    train = make_markov_sequences(
+        train_sequences, sequence_length, vocab_size, seed=101, transition_seed=303
+    )
+    evaluation = make_markov_sequences(
+        eval_sequences, sequence_length, vocab_size, seed=202, transition_seed=303
+    )
     calibration = [
         train[start : start + 16, :-1] for start in range(0, min(64, train_sequences), 16)
     ]
