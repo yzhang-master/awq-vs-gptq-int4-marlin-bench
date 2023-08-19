@@ -2,7 +2,7 @@
 
 ## Context
 
-**Techniques from 2023, reimplemented in 2026.** Era 2: Senior AI Engineer, efficient LLM inference. This repository compares round-to-nearest (RTN), activation-aware AWQ, and Hessian-compensated GPTQ using real packed groupwise INT4 weights and a mixed-precision torch decode path.
+**Techniques from 2023–2024, reimplemented in 2026.** Era 2: Senior AI Engineer, efficient LLM inference. This repository compares round-to-nearest (RTN), activation-aware AWQ, and Hessian-compensated GPTQ using real packed groupwise INT4 weights, a mixed-precision torch decode path, and the official Marlin FP16xINT4 CUDA kernel.
 
 ## Problem
 
@@ -49,18 +49,69 @@ The CPU packed path is **slower** than fp32: unpacking and dequantization domina
 
 ![Measured perplexity and decode throughput](results/tiny_cpu_pareto.svg)
 
-**Marlin and GPU status: pending.** No Marlin kernel, NVIDIA GPU result, large-transformer perplexity, or hardware memory saving is claimed. The reserved Marlin benchmark interface is:
+## Marlin CUDA benchmark
+
+`src/awq_gptq/marlin_bench.py` is an executable end-to-end benchmark, not a placeholder. It loads a local fp32 `TinyBigramLM` checkpoint, captures calibration activations, constructs real symmetric RTN, AWQ, or GPTQ INT4 weights, and packs every linear layer through the official `marlin.Layer.pack` API. Inference calls `marlin.Layer.forward`, which executes the compiled Marlin FP16xINT4 CUDA kernel. The original packed CPU implementation is independent and unchanged.
+
+Marlin's symmetric representation uses `scale = 2 * max(abs(W_group)) / 15` and signed codes in `[-8, 7]`; Marlin stores those codes with zero point eight. The adapter supports group size 128 or per-channel (`-1`), applies AWQ's inverse input scale inside `MarlinLinear`, and retains biases separately because official Marlin layers have no bias. Official shape restrictions are enforced: input features divisible by 128 and output features divisible by 256.
+
+The benchmark evaluates fp32 and Marlin models on identical held-out sequences and runs the same autoregressive greedy decode with the same batch, token count, and warmups. Every measured repetition is bracketed by `torch.cuda.synchronize`. JSON contains both perplexities, median/min/max tok/s, speedup, quantization time, actual Marlin buffer storage, GPU/library metadata, and the complete configuration. Output is written only after both runs succeed. Missing CUDA, an unsupported GPU, or a missing/broken official Marlin extension exits with status 2 and a clear `PENDING` message; there is no CPU fallback or fabricated result.
+
+**GPU measurements remain pending on this CPU-only host.** The kernel path and CLI are implemented, but actual CUDA execution, kernel numerics, and GPU performance have not been verified here.
+
+### Dependency
+
+The adapter targets **official IST-DASLab Marlin 0.1.1** (`marlin.Layer` and `marlin.mul`), not AutoGPTQ or vLLM. Use an NVIDIA GPU with compute capability >= 8.0, CUDA >= 11.8, an `nvcc` matching the torch CUDA build, and a separate environment:
+
+```bash
+python -m venv .venv-marlin && source .venv-marlin/activate
+# Install a CUDA-enabled torch build appropriate for the host first.
+git clone https://github.com/IST-DASLab/marlin.git
+cd marlin
+python -m pip install .
+cd ..
+python -m pip install -e ".[dev]"
+```
+
+No transformers, datasets, sentencepiece, or model-download package is used by this benchmark.
+
+### Local checkpoint and token format
+
+The checkpoint is a local `.pt`/`.pth` dictionary loaded with `weights_only=True`:
+
+```python
+{
+    "format": "awq-gptq-tiny-bigram-v1",
+    "config": {"vocab_size": 256, "hidden_size": 256, "expansion": 2},
+    "state_dict": TinyBigramLM(256, 256, 2).state_dict(),
+}
+```
+
+Dimensions may be compatible multiples; the preparation command uses 256/256/2. Tokens are integer `[sequences, sequence_length]` arrays in `.npy`, or `.pt`/`.pth` tensors or `{"tokens": tensor}` dictionaries. IDs must be within the checkpoint vocabulary. The first `--calibration-sequences` sequences calibrate quantization; all remaining sequences are held out for perplexity and decode. NumPy loading uses `allow_pickle=False`.
+
+To train and export a compatible local example without network access:
+
+```bash
+PYTHONPATH=src python -m awq_gptq.prepare_marlin_data \
+  --checkpoint artifacts/tiny256.pt --dataset artifacts/tokens.pt \
+  --steps 160 --train-sequences 128 --calibration-sequences 64 \
+  --eval-sequences 128 --sequence-length 33
+```
+
+Run the actual Marlin benchmark on the supported CUDA host:
 
 ```bash
 PYTHONPATH=src python -m awq_gptq.marlin_bench \
-  --model-checkpoint /path/to/local/model --dataset /path/to/local/tokens \
-  --group-size 128 --batch-size 16 --decode-tokens 128 --repeats 50 \
-  --output results/marlin_cuda.json
+  --model-checkpoint artifacts/tiny256.pt --dataset artifacts/tokens.pt \
+  --method gptq --group-size 128 --batch-size 16 --decode-tokens 128 \
+  --repeats 50 --calibration-sequences 64 --output results/marlin_cuda.json
 ```
 
-That module is intentionally not present yet; the command records the exact follow-up interface rather than disguising the CPU implementation as Marlin.
+Use `--method awq` or `--method rtn` for the other symmetric Marlin quantizers. `scripts/marlin_benchmark.sh` invokes the same module with `PYTHON_BIN` support.
 
 ## Reproduce
+
+CPU implementation and tests:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -73,24 +124,25 @@ scripts/benchmark.sh --smoke --output results/smoke.tmp
 scripts/benchmark.sh --output results/tiny_cpu.json
 ```
 
-On this workspace, use `PYTHON_BIN=/home/pus/.venvs/portfolio/bin/python` for the shell scripts. Rerunning overwrites the committed measurements with current timings. The benchmark has no network, dataset-download, transformers, or GPU dependency.
+On this workspace, use `PYTHON_BIN=/home/pus/.venvs/portfolio/bin/python` for the shell scripts. Rerunning overwrites the committed CPU measurements with current timings. The CPU benchmark and tests need no network, dataset download, transformers, Marlin, or GPU.
 
-The 20-test suite covers nibble order, odd widths, independent groups, constant groups, real packed matmul, AWQ salience and inverse scaling, GPTQ compensation and group boundaries, tiny-model training/evaluation/decode, storage accounting, benchmark output, and Pareto selection. Mutation checks replaced independent group scales, disabled AWQ salience, and removed GPTQ's residual update; each made pytest fail. Source was restored and all 20 tests passed again.
+The 43-test suite covers the original nibble/group/AWQ/GPTQ/model/benchmark checks plus Marlin shape and config validation, strict checkpoint/token loading, symmetric quantization, packing adapters, bias/input scaling, synchronized timing, end-to-end adapter evaluation and JSON output, and pending CLI behavior. Test doubles inject a CPU adapter only in tests; production requires official Marlin and CUDA. Earlier mutation checks replaced independent group scales, disabled AWQ salience, and removed GPTQ's residual update; each made pytest fail, and the restored original suite passed.
 
 ## Limitations
 
-- The perplexity task is synthetic and the model is deliberately tiny. It demonstrates end-to-end correctness and measurement, not AWQ/GPTQ quality on Llama-scale checkpoints or natural-language corpora.
-- GPTQ applies full trailing-matrix updates for clarity. Production lazy batch/block updates are more efficient; calibration cost is not included in decode tok/s.
-- The torch path reconstructs fp32 weights on every invocation. It does not fuse unpacking with a hardware integer tensor-core kernel, and its storage accounting is analytical object-size accounting rather than measured RSS.
+- Both CPU and Marlin harnesses use the synthetic `TinyBigramLM`, not a Hugging Face transformer or natural-language corpus. The Marlin checkpoint schema deliberately enforces official kernel-compatible dimensions.
+- GPTQ applies full trailing-matrix updates for clarity. Production lazy batch/block updates are more efficient; calibration and packing cost is reported separately from decode tok/s.
+- The CPU torch path reconstructs fp32 weights on every invocation. Marlin uses FP16 activations and non-quantized model components, so the end-to-end fp32 comparison includes the intended precision differences rather than isolating only GEMM latency.
 - AWQ uses output MSE on captured calibration inputs and a small alpha grid. It does not reproduce every implementation detail of the original AutoAWQ kernels.
-- GPU/Marlin support is unimplemented and pending; the command above is a specified follow-up, not an existing runnable benchmark.
+- Storage accounting includes actual Marlin weight/scale buffers but excludes workspaces, embeddings, activations, allocator overhead, and RSS.
+- Official Marlin CUDA execution and GPU result quality/performance remain untested on this host; no GPU measurements are claimed.
 
 ## References
 
 - J. Lin et al. *AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration.* MLSys 2024. arXiv:2306.00978.
 - E. Frantar et al. *GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers.* ICLR 2023. arXiv:2210.17323.
 - E. Frantar and D. Alistarh. *SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot.* ICML 2023 (related optimal brain compression background). arXiv:2301.00774.
-- Marlin: https://github.com/IST-DASLab/marlin (pending GPU kernel comparison).
+- E. Frantar et al. *MARLIN: Mixed-Precision Auto-Regressive Parallel Inference on Large Language Models.* 2024. arXiv:2408.11743. Kernel: https://github.com/IST-DASLab/marlin.
 
 ## License
 
