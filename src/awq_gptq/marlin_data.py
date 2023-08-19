@@ -11,7 +11,7 @@ CHECKPOINT_FORMAT = "awq-gptq-tiny-bigram-v1"
 
 
 def validate_marlin_config(config: dict) -> tuple[int, int, int]:
-    if set(config) != {"vocab_size", "hidden_size", "expansion"}:
+    if not isinstance(config, dict) or set(config) != {"vocab_size", "hidden_size", "expansion"}:
         raise ValueError("checkpoint config must contain vocab_size, hidden_size, and expansion")
     values = []
     for key in ("vocab_size", "hidden_size", "expansion"):
