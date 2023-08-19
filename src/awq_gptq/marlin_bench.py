@@ -164,7 +164,7 @@ def run_marlin_benchmark(
             "python": platform.python_version(),
             "torch": torch.__version__,
             "platform": platform.platform(),
-            "marlin_version": getattr(marlin_module, "__version__", "0.1.1"),
+            "marlin_version": getattr(marlin_module, "__version__", "unknown"),
             "marlin_module": getattr(marlin_module, "__file__", "unknown"),
             "gpu": torch.cuda.get_device_name(device)
             if device.startswith("cuda")
